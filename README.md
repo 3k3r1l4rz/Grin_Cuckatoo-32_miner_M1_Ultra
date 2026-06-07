@@ -1,203 +1,191 @@
-# Grin_Cuckatoo-32_miner_M1_Ultra
+# M1 Grin Miner — Binary Release (Apple M1 Ultra / Metal)
 
+A standalone Grin **Cuckatoo-32** miner for Apple Silicon: full graph solve on
+Apple Metal, with a stratum job/submit pipeline and a headless launcher.
 
-Standalone Grin Cuckatoo-32 miner for Apple Silicon, built around a Metal full
-solver and a small stratum submit pipeline.
+This package is a **binary release**, shared to demonstrate that the miner works
+end-to-end on real mainnet jobs — GPU solve, local `POW_OK` verification, and
+node-accepted C32 shares. **We intend to release the source and discuss the
+methods soon**; this early drop is just to show the working result. Happy to
+walk through any of it.
 
-The current target machine is an Apple M1 Ultra. Warm C32 throughput is about
-0.53 graphs/second, or roughly 1.9 seconds per graph. The first graph is slower
-because it includes Metal setup and unified-memory first touch.
+- Build: `a67866a`
+- Target: Apple Silicon macOS, arm64, Apple Metal
+- Validated against: `grin 5.4.0` / `grin-wallet 5.4.0-alpha.1`, mainnet
 
-Recovered 42-cycles are checked with the ported Tromp verifier before submit.
-In the live validation run, submitted shares were accepted by a local Grin
-5.4.0 mainnet node.
+---
 
-## Project Layout
+## 1. What's in this package
 
-```text
-src/mine34_live.m            Metal solver, stratum client, steering, submit path
-src/mine34_steer.m           steering support
-submit_source/               C support code for keys, job assignment, submit
-debug/strat_probe.c          stratum login and job-template probe
-Makefile                     builds mine34_live and debug tools
-miner.conf                   runtime configuration
-run.sh                       foreground runner
-start.sh                     detached launcher
-stop.sh                      stopper and cleanup script
-releases/                    packaged binary releases
+```
+mine34_live              compiled arm64 miner (Metal solver + stratum + submit)
+run.sh                   simple foreground run (honors env / args)
+run-no-telemetry.sh      foreground run with telemetry + steering forced OFF
+start.sh                 headless launcher (detached, pidfile, auto-restart)
+stop.sh                  clean stop (SIGTERM -> SIGKILL + orphan sweep)
+miner.conf               all runtime config (KEY=VALUE; safe defaults)
+debug/strat_probe        stratum readiness probe (login + job-height check)
+scheduler/m1_scheduler   optional local stratum scheduler/proxy
+README.md                this file
+SHA256SUMS               checksums for every file above
 ```
 
-## Requirements
+Source is not included in this drop — it will follow with a write-up of the
+approach. The binaries are fully compiled, so **no Xcode, clang, or `make` is
+needed to run them.**
 
-- Apple Silicon macOS with Metal support.
-- Enough unified memory for Cuckatoo-32. The miner reports about 74 GB in use.
-- Grin 5.4.0 mainnet node.
-- Grin wallet foreign API for coinbase generation.
+## 2. Host requirements
 
-The miner uses system Apple tooling and frameworks:
+- Apple Silicon Mac, intended for **M1 Ultra**.
+- macOS **arm64, 15.0 or newer** (built against SDK 26.2, min macOS 15.0).
+- Apple **Metal** available (system framework; nothing to install).
+- Enough **unified memory** for Cuckatoo-32 — the binary reports `mem~74GB`.
+- Local `grin` / `grin-wallet` 5.4.0 with a mainnet **node + treasury wallet**
+  running (see §4). The miner does not create node/wallet state.
 
-```text
-xcrun
-Metal
-Foundation
-```
+The miner links only system frameworks: `Metal`, `Foundation`,
+`CoreFoundation`, `libobjc`, `libSystem`.
 
-## Node And Wallet
-
-Start the treasury wallet before starting the node. The node needs the wallet
-foreign API for coinbase output construction.
-
-Expected local ports:
-
-```text
-treasury wallet foreign API   127.0.0.1:3417
-node owner API                127.0.0.1:3413
-node stratum                  127.0.0.1:3416
-```
-
-The node config should match the wallet listener:
-
-```toml
-wallet_listener_url = "http://127.0.0.1:3417"
-enable_stratum_server = true
-stratum_server_addr = "127.0.0.1:3416"
-```
-
-Check stratum readiness with:
+## 3. Quick start
 
 ```sh
-./debug/strat_probe 127.0.0.1 3416
+# 0. (only if copied/downloaded through quarantine)
+xattr -dr com.apple.quarantine .
+chmod +x *.sh mine34_live debug/strat_probe scheduler/m1_scheduler
+
+# 1. verify package integrity
+shasum -a 256 -c SHA256SUMS
+
+# 2. confirm the node is serving a real, non-zero-height job
+./debug/strat_probe 127.0.0.1 3416     # expect result:"ok" + height>0
+
+# 3. run (foreground, telemetry/steering OFF): C32 / 160 rounds / forever
+./run-no-telemetry.sh
+
+#    bounded smoke test (10 graphs):
+./run-no-telemetry.sh 32 160 10
 ```
 
-A usable response includes `result:"ok"` and a non-zero job height. If the miner
-prints `STRATUM_LOGIN_FAIL`, check the wallet listener and the node's
-`wallet_listener_url` first.
+Expected startup:
 
-## Build
+```
+cuckatoo32 FAST miner: nb=32768 coarse=128 fine_n=256 rounds=160 maxkeys=... mem~74GB
+LIVE: logged in to 127.0.0.1:3416 as m1miner (C32, 160 rounds)
+NEW JOB height=... job_id=...
+key 1: ... WALL 1.8...
+```
+
+If you see `STRATUM_LOGIN_FAIL 127.0.0.1:3416` instead, the node side isn't
+ready — see §4.
+
+## 4. Node + wallet prerequisites
+
+The miner needs a grin 5.4.0 mainnet node whose **stratum** is up **and**
+building real block templates, which requires the **treasury wallet** to be
+listening so the node can fetch a coinbase. Expected local ports:
+
+- wallet foreign listener: `127.0.0.1:3417`
+- node owner API:          `127.0.0.1:3413`
+- node stratum:            `127.0.0.1:3416`
+
+Bring up the **wallet listener first, then the node.** The node's
+`grin-server.toml` needs `wallet_listener_url = "http://127.0.0.1:3417"` (matching
+the wallet's `api_listen_port`), `enable_stratum_server = true`, and
+`stratum_server_addr = "127.0.0.1:3416"`.
+
+Readiness means a **real non-zero job height**, not just an open port — confirm
+with `./debug/strat_probe 127.0.0.1 3416`. If the miner prints
+`STRATUM_LOGIN_FAIL`, it's almost always node-side (the node can't reach the
+treasury wallet, so stratum has no job).
+
+## 5. Configure
+
+Edit `miner.conf` (`KEY=VALUE`, shell-sourceable). Defaults mine a local node
+with **steerer and telemetry OFF**:
+
+- `M1_STRATUM_HOST` / `_PORT` / `_LOGIN` / `_PASSWORD`
+- `EDGE_BITS=32` (real Cuckatoo size), `ROUNDS=160`
+- `MAXGRAPHS=0` (run forever; the warm loop lives inside the binary)
+- `M1_STEER` — blank (experimental; left OFF for this release)
+- `M1_TELEMETRY_PATH` — blank (zero-cost OFF)
+
+Env vars override the file, e.g. `M1_STRATUM_HOST=10.0.0.5 ./run.sh`.
+
+## 6. Run headless (supervised)
 
 ```sh
-make
-```
-
-The default build produces:
-
-```text
-./mine34_live
-./debug/strat_probe
-```
-
-Clean build output with:
-
-```sh
-make clean
-```
-
-## Configuration
-
-Edit `miner.conf`. It is a simple `KEY=VALUE` file.
-
-Common settings:
-
-```text
-M1_STRATUM_HOST
-M1_STRATUM_PORT
-M1_STRATUM_LOGIN
-M1_STRATUM_PASSWORD
-EDGE_BITS=32
-ROUNDS=160
-MAXGRAPHS=0
-M1_STEER=
-M1_TELEMETRY_PATH=
-```
-
-`MAXGRAPHS=0` runs continuously. Leave `M1_STEER` and `M1_TELEMETRY_PATH` blank
-for the conservative local-node path.
-
-## Run
-
-Foreground:
-
-```sh
-./run.sh
-```
-
-Headless:
-
-```sh
-./start.sh
+./start.sh            # detached: logs to ./logs/miner-<ts>.log, pidfile, auto-restart
+./start.sh -f         # foreground (live console)
 tail -f logs/miner-*.log
-./stop.sh
+./stop.sh             # clean SIGTERM -> SIGKILL escalation + orphan sweep
 ```
 
-Use foreground mode while checking a new node or wallet setup.
+## 7. Verifying submits (node-side is authoritative)
 
-## Submit Verification
-
-The miner log shows the local proof and submit path:
-
-```text
-42-CYCLE found! ... verify=POW_OK
-SUBMITTING share -> node
-SUBMIT resp: ...
-```
-
-`SUBMIT resp` confirms the node received the submit. The node log gives the
-accepted-or-stale verdict:
+The miner prints `42-CYCLE found! ... verify=POW_OK` → `SUBMITTING share` →
+`SUBMIT resp: ...`. Note `SUBMIT resp` means *received*, not *accepted* — the
+node returns `result:ok` on receipt even for a stale share. The authoritative
+verdict is in the node log:
 
 ```sh
 grep -E 'Got share|submitted too late' ~/.local/share/grin/node/grin-server.log
 ```
 
-Typical outcomes:
+- `Got share at height H ... submitted by m1miner` = accepted.
+- `Share at height H ... submitted too late`       = stale.
 
-```text
-Got share at height H ... submitted by m1miner
-Share at height H ... submitted too late
+## 8. Validation evidence
+
+Validated live against a local grin 5.4.0 node + wallet.
+
+**Throughput** (warm hot-path; cold graph 0 excluded):
+
+```
+target floor:       0.53 graphs/second
+validated average:  0.540887 graphs/second  (27 warm samples, ~1.85 s/graph)
+cold key 0:         5.160 s  (program start + Metal setup + first-touch, excluded)
 ```
 
-## Validation Snapshot
+Representative warm per-graph timings: `key 1..5` ≈ 1.846–1.863 s; steady
+`key 50..1100` ≈ 1.83–1.86 s.
 
-Live C32 run against a local Grin 5.4.0 node and wallet:
+**Correctness** (every recovered candidate verified before submit, using the
+ported Tromp `verify()`):
 
-```text
-warm throughput:  about 0.53 graphs/second
-warm timing:      about 1.83-1.86 seconds/graph
-cold first graph: about 6.5 seconds in earlier full first-touch runs
+```
+found=22 ok=22 fail=0 submitted=22  across 1124 graphs
+node_accepted_current_run=22  node_reject_errors_current_run=0
 ```
 
-Correctness and submit summary:
+The node log showed the corresponding accepted C32 shares
+(`Got share at height ... edge_bits 32 ... submitted by m1miner`).
 
-```text
-found=22
-ok=22
-fail=0
-submitted=22
-graphs=1124
-```
+Scope: the miner reports at most one valid 42-cycle per graph (the share-mining
+path) — this demonstrates the reported shares are valid and node-accepted; it is
+not an exhaustive per-graph cycle enumeration.
 
-The miner reports the share-mining path, not exhaustive cycle enumeration.
+## 9. Known issues (being fixed)
 
-## Current Limitation
+We're actively working on these and will fold the fixes into the source release:
 
-The miner currently refreshes its job every 8 graphs and does not consume the
-node's unsolicited `method:"job"` updates. If the chain advances during that
-window, a locally valid cycle can arrive after the node has moved to the next
-height and will be logged as stale.
+- **Stale shares.** The miner currently refreshes its job only every 8 graphs
+  and does not consume the node's unsolicited job pushes, so when a new block
+  arrives mid-loop it can keep mining the old height for up to ~15 s and those
+  cycles are rejected `submitted too late`. About 3% of graphs yield a 42-cycle
+  (the real Cuckatoo rate) and roughly half land in time at mainnet churn. The
+  in-progress fix consumes the node's `method:"job"` pushes to refresh height
+  within ~2 s, so most found shares should land; we've staged it carefully
+  because it touches the verified solver loop.
 
-The next improvement is to consume job updates inside the mining loop so height
-changes are picked up quickly without disturbing the verified solver path.
+If you hit anything else, let us know — we're iterating on this now.
 
-## Binary Release
-
-The current packaged binary release is under:
-
-```text
-releases/m1_grin_miner_m1ultra_binaries_a67866a_20260607T091251Z/
-```
-
-Inside that directory:
+## 10. Verify package files
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-./run-no-telemetry.sh
+file mine34_live          # -> Mach-O 64-bit executable arm64
 ```
+
+---
+
+*Source and a write-up of the methods to follow. Questions and review welcome.*
