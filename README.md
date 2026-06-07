@@ -188,4 +188,4 @@ file mine34_live          # -> Mach-O 64-bit executable arm64
 
 ---
 
-*Source and a write-up of the methods to follow. Questions and review welcome.*
+*Source and a write-up of the methods to follow. Questions and review welcome. Donations and loose change can be sent here: bc1qwg6mz4tn2cy3he4zyw4sfg7avf3vl7x7lmayv9 Thanks for the support*
