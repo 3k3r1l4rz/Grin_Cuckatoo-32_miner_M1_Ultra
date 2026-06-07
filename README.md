@@ -1,4 +1,5 @@
-# m1_grin_miner
+# Grin_Cuckatoo-32_miner_M1_Ultra
+
 
 Standalone Grin Cuckatoo-32 miner for Apple Silicon, built around a Metal full
 solver and a small stratum submit pipeline.
