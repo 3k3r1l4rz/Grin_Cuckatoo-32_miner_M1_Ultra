@@ -164,22 +164,8 @@ Scope: the miner reports at most one valid 42-cycle per graph (the share-mining
 path) — this demonstrates the reported shares are valid and node-accepted; it is
 not an exhaustive per-graph cycle enumeration.
 
-## 9. Known issues (being fixed)
 
-We're actively working on these and will fold the fixes into the source release:
-
-- **Stale shares.** The miner currently refreshes its job only every 8 graphs
-  and does not consume the node's unsolicited job pushes, so when a new block
-  arrives mid-loop it can keep mining the old height for up to ~15 s and those
-  cycles are rejected `submitted too late`. About 3% of graphs yield a 42-cycle
-  (the real Cuckatoo rate) and roughly half land in time at mainnet churn. The
-  in-progress fix consumes the node's `method:"job"` pushes to refresh height
-  within ~2 s, so most found shares should land; we've staged it carefully
-  because it touches the verified solver loop.
-
-If you hit anything else, let us know — we're iterating on this now.
-
-## 10. Verify package files
+## 9. Verify package files
 
 ```sh
 shasum -a 256 -c SHA256SUMS
